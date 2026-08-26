@@ -1,0 +1,116 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+
+  dataRooms     DataRoom[]
+  createdShares Share[]
+}
+
+model DataRoom {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  folders Folder[]
+  files   File[]
+  shares  Share[]
+
+  @@index([ownerId])
+}
+
+// Every DataRoom gets exactly one root folder (parentId = null).
+// All files live inside a folder, so (folderId, name) uniqueness covers the
+// whole tree, including "room level" files that sit in the root folder.
+model Folder {
+  id         String   @id @default(cuid())
+  name       String
+  dataRoomId String
+  dataRoom   DataRoom @relation(fields: [dataRoomId], references: [id], onDelete: Cascade)
+  parentId   String?
+  parent     Folder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   Folder[] @relation("FolderTree")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  files  File[]
+  shares Share[]
+
+  // Root folders have parentId = null; there is one per room, so the
+  // constraint only needs to hold among sibling non-root folders
+  // (Postgres treats NULLs as distinct, which is exactly what we want here).
+  @@unique([parentId, name])
+  @@index([dataRoomId])
+  @@index([parentId])
+}
+
+model File {
+  id         String   @id @default(cuid())
+  name       String
+  size       Int
+  mimeType   String
+  storageKey String   @unique
+  dataRoomId String
+  dataRoom   DataRoom @relation(fields: [dataRoomId], references: [id], onDelete: Cascade)
+  folderId   String
+  folder     Folder   @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shares Share[]
+
+  @@unique([folderId, name])
+  @@index([dataRoomId])
+  @@index([folderId])
+}
+
+enum ShareType {
+  LINK // public link: anyone with the token can view
+  USER // permissioned: only the invited email can view (after signing in)
+}
+
+enum ShareRole {
+  VIEWER
+  // EDITOR can be added later without remodeling: permission checks already
+  // resolve to a role, endpoints just need to accept role >= required.
+}
+
+// One share row targets exactly one resource: a DataRoom, a Folder or a File.
+// FKs cascade, so revocation on resource deletion is automatic.
+model Share {
+  id           String    @id @default(cuid())
+  type         ShareType
+  role         ShareRole @default(VIEWER)
+  token        String?   @unique // LINK shares
+  granteeEmail String? // USER shares (lowercased)
+  createdById  String
+  createdBy    User      @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+
+  dataRoomId String?
+  dataRoom   DataRoom? @relation(fields: [dataRoomId], references: [id], onDelete: Cascade)
+  folderId   String?
+  folder     Folder?   @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  fileId     String?
+  file       File?     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([granteeEmail])
+  @@index([dataRoomId])
+  @@index([folderId])
+  @@index([fileId])
+  @@index([createdById])
+}
